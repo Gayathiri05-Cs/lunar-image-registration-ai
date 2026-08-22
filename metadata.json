@@ -1,0 +1,6 @@
+{
+  "name": "Lunar Image Registration Platform",
+  "description": "Automatic lunar image registration, cross-sensor correspondence point detection, RANSAC geometric verification, and sub-pixel alignment for Chandrayaan-2 OHRC/TMC imagery.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
