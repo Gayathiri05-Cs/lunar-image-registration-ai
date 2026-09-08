@@ -3,8 +3,8 @@ export type LunarSensorType = SensorType;
 
 export type FeatureMethod = 'SIFT' | 'ORB' | 'AKAZE' | 'HYBRID' | 'HYBRID_LUNAR';
 export type TransformModelType = 'HOMOGRAPHY' | 'AFFINE' | 'SIMILARITY' | 'RIGID';
-export type VisualMode = 'side_by_side' | 'overlay' | 'blink' | 'difference' | 'matches';
-export type VisualizationMode = 'SIDE_BY_SIDE' | 'OVERLAY' | 'BLINK' | 'DIFFERENCE' | 'MATCHES' | 'HEATMAP' | VisualMode;
+export type VisualMode = 'side_by_side' | 'overlay' | 'blink' | 'difference' | 'matches' | 'tri_sensor';
+export type VisualizationMode = 'SIDE_BY_SIDE' | 'OVERLAY' | 'BLINK' | 'DIFFERENCE' | 'MATCHES' | 'HEATMAP' | 'TRI_SENSOR' | VisualMode;
 export type BlendMode = 'alpha' | 'split_wipe' | 'checkerboard' | 'difference' | 'ALPHA' | 'SPLIT_WIPE' | 'CHECKERBOARD' | 'DIFFERENCE' | 'EDGES';
 
 export interface ImageMetadata {
@@ -23,6 +23,8 @@ export interface ImageMetadata {
   geoCenterLat?: number;
   geoCenterLon?: number;
   pixelScaleKm?: number;
+  sourceOrigin?: string; // e.g., 'ISRO_CH2', 'GOOGLE_LUNAR', 'NASA_LROC', 'USER_UPLOAD'
+  spectralBand?: string; // e.g., 'VIS 0.45-0.70um', 'NIR 0.8-5.0um'
 }
 
 export interface Keypoint {
@@ -65,6 +67,28 @@ export interface TransformationMatrix {
   translationY?: number;
 }
 
+// ----------------------------------------------------
+// Feature 3: Explainable Confidence Factor Models
+// ----------------------------------------------------
+export interface ConfidenceFactor {
+  id: string;
+  name: string;
+  weightPercent: number;
+  score: number; // 0 - 100
+  status: 'EXCELLENT' | 'GOOD' | 'FAIR' | 'POOR';
+  measuredValue: string;
+  benchmark: string;
+  description: string;
+  formula: string;
+}
+
+export interface ExplainableConfidence {
+  overallScore: number; // 0 to 100
+  verdict: 'HIGH CONFIDENCE' | 'MODERATE CONFIDENCE' | 'LOW CONFIDENCE' | 'UNRELIABLE';
+  factors: ConfidenceFactor[];
+  summaryPoints: string[];
+}
+
 export interface RegistrationMetrics {
   totalCandidates: number;
   inlierCount: number;
@@ -74,6 +98,7 @@ export interface RegistrationMetrics {
   meanResidual: number;
   maxResidual: number;
   confidenceScore: number; // 0 to 100%
+  explainableConfidence?: ExplainableConfidence;
   spatialDistributionScore: number; // 0 to 100%
   spatialWarning?: string;
   subpixelAchieved: boolean;
@@ -82,15 +107,95 @@ export interface RegistrationMetrics {
   ransacIterations: number;
 }
 
+// ----------------------------------------------------
+// Feature 2: Lunar Feature Identity Card Models
+// ----------------------------------------------------
+export type LunarFeatureType = 
+  | 'CRATER' 
+  | 'CENTRAL_PEAK' 
+  | 'RIM_CREST' 
+  | 'RIDGE' 
+  | 'RILLE' 
+  | 'BOULDER_FIELD' 
+  | 'MARE_BASIN';
+
+export interface LunarFeatureSensorDetection {
+  sensor: SensorType;
+  detected: boolean;
+  pixelCoords?: { x: number; y: number };
+  snr?: number;
+  scale?: number;
+}
+
+export interface LunarFeatureIDCard {
+  id: string; // e.g. "PRISM-LF-00127"
+  name: string; // e.g. "Boguslawsky South Crater Rim A"
+  type: LunarFeatureType;
+  lunarLat: number; // e.g. -72.9142
+  lunarLon: number; // e.g. 43.1850
+  diameterMeters?: number;
+  confidence: number; // 0 - 100
+  observedSensors: LunarFeatureSensorDetection[];
+  firstObservedDate: string;
+  lastVerifiedDate: string;
+  observationCount: number;
+  isPreviouslyObserved: boolean;
+  description: string;
+  keypointThumbnail?: string;
+}
+
+// ----------------------------------------------------
+// Feature 1: Tri-Sensor Outlier Detection Models
+// ----------------------------------------------------
+export interface PairwiseMatchResult {
+  sensorA: SensorType;
+  sensorB: SensorType;
+  imageAName: string;
+  imageBName: string;
+  candidateCount: number;
+  inlierCount: number;
+  inlierRatio: number;
+  rmse: number;
+  spatialCoverage: number;
+  compatibilityScore: number; // 0 to 100%
+  isCompatible: boolean;
+  reason: string;
+  matches?: MatchPoint[];
+}
+
+export interface TriSensorValidationResult {
+  status: 'ALL_VALID' | 'OUTLIER_DETECTED' | 'MULTIPLE_OUTLIERS' | 'INCONCLUSIVE';
+  outlierSensor?: SensorType;
+  outlierName?: string;
+  outlierSlot?: 'OHRC' | 'TMC' | 'IIRS';
+  validSensors: SensorType[];
+  pairwise: {
+    ohrc_tmc: PairwiseMatchResult;
+    ohrc_iirs: PairwiseMatchResult;
+    tmc_iirs: PairwiseMatchResult;
+  };
+  diagnosticMessage: string;
+  detailedReason: string;
+  canProceedWithPair: boolean;
+  suggestedAction: string;
+}
+
+export interface TriSensorSlotData {
+  image: string | null;
+  meta: ImageMetadata | null;
+}
+
 export interface RegistrationResult {
   id: string;
   timestamp: string;
   sourceMeta: ImageMetadata;
   referenceMeta: ImageMetadata;
+  thirdMeta?: ImageMetadata;
   featureMethod: FeatureMethod;
   transformModel: TransformModelType;
   sourceKeypoints: Keypoint[];
   referenceKeypoints: Keypoint[];
+  thirdKeypoints?: Keypoint[];
   matches: MatchPoint[];
   transformation: TransformationMatrix;
   metrics: RegistrationMetrics;
@@ -99,6 +204,10 @@ export interface RegistrationResult {
   matchesDataUrl?: string;
   sourceDataUrl: string;
   referenceDataUrl: string;
+  thirdDataUrl?: string;
+  triSensorValidation?: TriSensorValidationResult;
+  lunarFeatures?: LunarFeatureIDCard[];
+  explainableConfidence?: ExplainableConfidence;
   simpleExplanation: string;
   technicalExplanation: string;
   aiInsights?: string;
@@ -108,15 +217,18 @@ export interface RegistrationResult {
 export type PipelineStage = 
   | 'IDLE'
   | 'VALIDATING'
+  | 'PAIRWISE_CHECK'
   | 'PREPROCESSING'
   | 'DETECTING_FEATURES'
   | 'DESCRIBING_FEATURES'
   | 'MATCHING_FEATURES'
   | 'GEOMETRIC_VERIFICATION'
   | 'SUBPIXEL_REFINEMENT'
+  | 'FEATURE_ID_GENERATION'
   | 'WARPING_REGISTRATION'
   | 'EVALUATING_QUALITY'
   | 'COMPLETED'
+  | 'BLOCKED_OUTLIER'
   | 'FAILED';
 
 export interface StageStatus {
@@ -154,6 +266,7 @@ export interface HistoryItem {
   projectName: string;
   sourceName: string;
   referenceName: string;
+  thirdName?: string;
   sensor: SensorType;
   algorithm: FeatureMethod;
   transformModel: TransformModelType;
@@ -161,7 +274,7 @@ export interface HistoryItem {
   inlierRatio: number;
   rmse: number;
   confidence: number;
-  status: 'SUCCESS' | 'WARNING' | 'FAILED';
+  status: 'SUCCESS' | 'WARNING' | 'FAILED' | 'BLOCKED_OUTLIER';
   result?: RegistrationResult;
 }
 
@@ -171,13 +284,20 @@ export interface DemoDataset {
   subtitle: string;
   description: string;
   region: string;
+  isTriSensor?: boolean;
+  hasOutlier?: boolean;
+  outlierSensorSlot?: 'OHRC' | 'TMC' | 'IIRS';
   sourceSensor: SensorType;
   referenceSensor: SensorType;
+  thirdSensor?: SensorType;
   sourceSunElevation: number;
   referenceSunElevation: number;
+  thirdSunElevation?: number;
   expectedChallenge: string;
   sourceImage: string;
   referenceImage: string;
+  thirdImage?: string;
   sourceMeta: Partial<ImageMetadata>;
   referenceMeta: Partial<ImageMetadata>;
+  thirdMeta?: Partial<ImageMetadata>;
 }

@@ -8,6 +8,7 @@ import {
   RotateCcw,
   Layers,
   ChevronDown,
+  Compass,
 } from 'lucide-react';
 import { SupportedLanguage } from '../types';
 import { LANGUAGES, TRANSLATIONS } from '../i18n/locales';
@@ -18,6 +19,7 @@ interface HeaderProps {
   onOpenDemo: () => void;
   onOpenHistory: () => void;
   onOpenDiagnostics: () => void;
+  onOpenFeatureRegistry?: () => void;
   onReset: () => void;
   hasResult: boolean;
 }
@@ -28,6 +30,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenDemo,
   onOpenHistory,
   onOpenDiagnostics,
+  onOpenFeatureRegistry,
   onReset,
   hasResult,
 }) => {
@@ -48,7 +51,7 @@ export const Header: React.FC<HeaderProps> = ({
               <h1 className="text-base sm:text-lg font-bold tracking-tight text-white flex items-center gap-2">
                 <span>{t.appTitle}</span>
                 <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-cyan-950/80 border border-cyan-800/60 text-cyan-300 font-medium">
-                  CH-2 OHRC / TMC
+                  CH-2 OHRC / TMC / IIRS
                 </span>
               </h1>
             </div>
@@ -60,6 +63,19 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Right: Actions & Language Selector */}
         <div className="flex items-center gap-2 sm:gap-3">
+          {/* Feature Registry Button */}
+          {onOpenFeatureRegistry && (
+            <button
+              id="header-feature-registry-btn"
+              onClick={onOpenFeatureRegistry}
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg bg-slate-900/80 hover:bg-slate-800 text-purple-300 hover:text-white border border-purple-900/60 text-xs sm:text-sm transition cursor-pointer"
+              title="Lunar Feature Registry (PRISM-LF-XXXXX)"
+            >
+              <Compass className="w-4 h-4 text-purple-400" />
+              <span className="hidden xl:inline">Feature Registry</span>
+            </button>
+          )}
+
           {/* Try Demo Button */}
           <button
             id="header-try-demo-btn"

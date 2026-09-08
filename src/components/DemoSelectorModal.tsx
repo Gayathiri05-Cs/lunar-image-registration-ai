@@ -1,5 +1,5 @@
-import React from 'react';
-import { X, Sparkles, Sun, Compass, Play, Layers } from 'lucide-react';
+import React, { useState } from 'react';
+import { X, Sparkles, Sun, Compass, Play, Layers, ShieldAlert, CheckCircle2 } from 'lucide-react';
 import { DemoDataset, SupportedLanguage } from '../types';
 import { DEMO_DATASETS } from '../data/demoData';
 import { TRANSLATIONS } from '../i18n/locales';
@@ -17,8 +17,16 @@ export const DemoSelectorModal: React.FC<DemoSelectorModalProps> = ({
   onSelectDataset,
   currentLang,
 }) => {
+  const [filterCategory, setFilterCategory] = useState<'ALL' | 'TRI_SENSOR' | 'PAIR'>('ALL');
+
   if (!isOpen) return null;
   const t = TRANSLATIONS[currentLang];
+
+  const filteredDatasets = DEMO_DATASETS.filter(d => {
+    if (filterCategory === 'TRI_SENSOR') return d.isTriSensor;
+    if (filterCategory === 'PAIR') return !d.isTriSensor;
+    return true;
+  });
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
@@ -34,7 +42,9 @@ export const DemoSelectorModal: React.FC<DemoSelectorModalProps> = ({
             </div>
             <div>
               <h3 className="text-base font-bold text-white">{t.demoTitle}</h3>
-              <p className="text-xs text-slate-400">{t.demoSelectPrompt}</p>
+              <p className="text-xs text-slate-400">
+                Select real Chandrayaan-2 simulated lunar benchmark scenes.
+              </p>
             </div>
           </div>
           <button
@@ -45,23 +55,58 @@ export const DemoSelectorModal: React.FC<DemoSelectorModalProps> = ({
           </button>
         </div>
 
+        {/* Category Tabs */}
+        <div className="px-6 py-3 border-b border-slate-800/80 bg-slate-900/30 flex items-center gap-2">
+          <button
+            onClick={() => setFilterCategory('ALL')}
+            className={`px-3 py-1 rounded-lg text-xs font-mono transition cursor-pointer ${
+              filterCategory === 'ALL'
+                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-bold'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            All Datasets ({DEMO_DATASETS.length})
+          </button>
+          <button
+            onClick={() => setFilterCategory('TRI_SENSOR')}
+            className={`px-3 py-1 rounded-lg text-xs font-mono transition flex items-center gap-1.5 cursor-pointer ${
+              filterCategory === 'TRI_SENSOR'
+                ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40 font-bold'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <ShieldAlert className="w-3 h-3 text-purple-400" />
+            <span>3-Sensor Outlier Benchmarks ({DEMO_DATASETS.filter(d => d.isTriSensor).length})</span>
+          </button>
+          <button
+            onClick={() => setFilterCategory('PAIR')}
+            className={`px-3 py-1 rounded-lg text-xs font-mono transition cursor-pointer ${
+              filterCategory === 'PAIR'
+                ? 'bg-slate-700 text-white font-bold'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            Dual Sensor Pairs ({DEMO_DATASETS.filter(d => !d.isTriSensor).length})
+          </button>
+        </div>
+
         {/* Datasets Grid */}
         <div className="p-6 overflow-y-auto space-y-4">
-          {DEMO_DATASETS.map(demo => (
+          {filteredDatasets.map(demo => (
             <div
               key={demo.id}
               className="p-4 rounded-xl bg-slate-900/60 border border-slate-800 hover:border-cyan-500/50 transition flex flex-col md:flex-row gap-4 items-center justify-between group"
             >
               {/* Previews */}
-              <div className="flex items-center gap-3 shrink-0">
+              <div className="flex items-center gap-2 shrink-0">
                 <div className="relative">
                   <img
                     src={demo.sourceImage}
                     alt="Source Preview"
-                    className="w-24 h-24 object-cover rounded-lg border border-cyan-700/40 shadow"
+                    className="w-20 h-20 object-cover rounded-lg border border-cyan-700/40 shadow"
                   />
-                  <span className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded bg-black/80 text-[9px] font-mono text-cyan-300">
-                    SRC: {demo.sourceSensor}
+                  <span className="absolute bottom-1 left-1 px-1 py-0.2 rounded bg-black/80 text-[8px] font-mono text-cyan-300">
+                    {demo.sourceSensor}
                   </span>
                 </div>
                 <div className="text-slate-500 font-mono text-xs">⟷</div>
@@ -69,12 +114,27 @@ export const DemoSelectorModal: React.FC<DemoSelectorModalProps> = ({
                   <img
                     src={demo.referenceImage}
                     alt="Ref Preview"
-                    className="w-24 h-24 object-cover rounded-lg border border-purple-700/40 shadow"
+                    className="w-20 h-20 object-cover rounded-lg border border-purple-700/40 shadow"
                   />
-                  <span className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded bg-black/80 text-[9px] font-mono text-purple-300">
-                    REF: {demo.referenceSensor}
+                  <span className="absolute bottom-1 left-1 px-1 py-0.2 rounded bg-black/80 text-[8px] font-mono text-purple-300">
+                    {demo.referenceSensor}
                   </span>
                 </div>
+                {demo.thirdImage && (
+                  <>
+                    <div className="text-slate-500 font-mono text-xs">⟷</div>
+                    <div className="relative">
+                      <img
+                        src={demo.thirdImage}
+                        alt="Third Preview"
+                        className="w-20 h-20 object-cover rounded-lg border border-amber-700/40 shadow"
+                      />
+                      <span className="absolute bottom-1 left-1 px-1 py-0.2 rounded bg-black/80 text-[8px] font-mono text-amber-300">
+                        {demo.thirdSensor || 'IIRS'}
+                      </span>
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Info */}
@@ -86,6 +146,11 @@ export const DemoSelectorModal: React.FC<DemoSelectorModalProps> = ({
                   <span className="px-2 py-0.5 rounded-full bg-cyan-950/80 border border-cyan-800 text-[10px] text-cyan-300 font-medium">
                     {demo.region}
                   </span>
+                  {demo.isTriSensor && (
+                    <span className="px-2 py-0.5 rounded-full bg-purple-950/80 border border-purple-800 text-[10px] text-purple-300 font-mono font-bold">
+                      Tri-Sensor
+                    </span>
+                  )}
                 </div>
                 <p className="text-xs text-slate-300 leading-snug">{demo.description}</p>
                 <div className="flex flex-wrap items-center gap-4 text-[11px] text-slate-400 pt-1">

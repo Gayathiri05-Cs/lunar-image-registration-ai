@@ -8,6 +8,8 @@ import {
   CheckCircle2,
   Moon,
   ExternalLink,
+  ShieldAlert,
+  Compass,
 } from 'lucide-react';
 import {
   SupportedLanguage,
@@ -17,6 +19,7 @@ import {
   FeatureMethod,
   TransformModelType,
   DemoDataset,
+  TriSensorValidationResult,
 } from './types';
 import { TRANSLATIONS } from './i18n/locales';
 import { Header } from './components/Header';
@@ -30,8 +33,10 @@ import { ExplanationModal } from './components/ExplanationModal';
 import { HistoryModal } from './components/HistoryModal';
 import { ExportModal } from './components/ExportModal';
 import { DiagnosticsModal } from './components/DiagnosticsModal';
-import { DEMO_DATASETS } from './data/demoData';
+import { LunarFeatureExplorer } from './components/LunarFeatureExplorer';
+import { DEMO_DATASETS, TRI_SENSOR_DEMOS } from './data/demoData';
 import { loadImageToCanvas, runRegistrationPipeline } from './cv/pipeline';
+import { validateTriSensorScene } from './cv/triSensorValidation';
 import { saveRegistrationToHistory } from './services/aiService';
 
 export function App() {
@@ -39,19 +44,23 @@ export function App() {
   const [currentLang, setCurrentLang] = useState<SupportedLanguage>('en');
   const t = TRANSLATIONS[currentLang];
 
-  // 2. Images & Metadata State
+  // 2. Images & Metadata State (OHRC, TMC, IIRS)
   const [sourceImage, setSourceImage] = useState<string | null>(null);
   const [referenceImage, setReferenceImage] = useState<string | null>(null);
+  const [thirdImage, setThirdImage] = useState<string | null>(null);
+
   const [sourceMeta, setSourceMeta] = useState<ImageMetadata | null>(null);
   const [referenceMeta, setReferenceMeta] = useState<ImageMetadata | null>(null);
+  const [thirdMeta, setThirdMeta] = useState<ImageMetadata | null>(null);
 
-  // 3. Pipeline Execution State
+  // 3. Pipeline Execution & Tri-Sensor State
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [pipelineStatus, setPipelineStatus] = useState<StageStatus>({
     stage: 'IDLE',
     progress: 0,
     message: 'Ready',
   });
+  const [triSensorValidation, setTriSensorValidation] = useState<TriSensorValidationResult | null>(null);
   const [registrationResult, setRegistrationResult] = useState<RegistrationResult | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -61,6 +70,7 @@ export function App() {
   const [historyModalOpen, setHistoryModalOpen] = useState<boolean>(false);
   const [exportModalOpen, setExportModalOpen] = useState<boolean>(false);
   const [diagnosticsModalOpen, setDiagnosticsModalOpen] = useState<boolean>(false);
+  const [featureRegistryOpen, setFeatureRegistryOpen] = useState<boolean>(false);
 
   const workspaceRef = useRef<HTMLDivElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
@@ -74,8 +84,11 @@ export function App() {
   const handleReset = () => {
     setSourceImage(null);
     setReferenceImage(null);
+    setThirdImage(null);
     setSourceMeta(null);
     setReferenceMeta(null);
+    setThirdMeta(null);
+    setTriSensorValidation(null);
     setRegistrationResult(null);
     setErrorMessage(null);
     setPipelineStatus({ stage: 'IDLE', progress: 0, message: 'Ready' });
@@ -85,25 +98,49 @@ export function App() {
   const handleSelectDemo = async (demo: DemoDataset, autoStart: boolean = false) => {
     setSourceImage(demo.sourceImage);
     setReferenceImage(demo.referenceImage);
+    setThirdImage(demo.thirdImage || null);
+
     setSourceMeta(demo.sourceMeta);
     setReferenceMeta(demo.referenceMeta);
+    setThirdMeta(demo.thirdMeta || null);
+
+    setTriSensorValidation(null);
     setRegistrationResult(null);
     setErrorMessage(null);
 
     if (autoStart) {
       setTimeout(() => {
-        executePipeline({
-          featureMethod: 'SIFT',
-          transformModel: 'HOMOGRAPHY',
-          inlierThresholdPx: 3.0,
-          enableCLAHE: true,
-          enableSubpixel: true,
-        }, demo.sourceImage, demo.referenceImage, demo.sourceMeta, demo.referenceMeta);
+        executePipeline(
+          {
+            featureMethod: 'SIFT',
+            transformModel: 'HOMOGRAPHY',
+            inlierThresholdPx: 3.0,
+            enableCLAHE: true,
+            enableSubpixel: true,
+          },
+          demo.sourceImage,
+          demo.referenceImage,
+          demo.thirdImage,
+          demo.sourceMeta,
+          demo.referenceMeta,
+          demo.thirdMeta
+        );
       }, 100);
     }
   };
 
-  // Execute Core Registration Pipeline
+  // Load Tri-Sensor Quick Benchmark Presets
+  const handleLoadTriSensorPreset = (type: 'valid' | 'iirs_outlier' | 'ohrc_outlier') => {
+    if (type === 'valid') {
+      handleSelectDemo(TRI_SENSOR_DEMOS.valid);
+    } else if (type === 'iirs_outlier') {
+      handleSelectDemo(TRI_SENSOR_DEMOS.iirsOutlier);
+    } else {
+      handleSelectDemo(TRI_SENSOR_DEMOS.ohrcOutlier);
+    }
+  };
+
+  // Execute Core Registration Pipeline (With Tri-Sensor Outlier Validation)
   const executePipeline = async (
     options: {
       featureMethod: FeatureMethod;
@@ -114,11 +151,13 @@ export function App() {
     },
     srcImgUrl = sourceImage,
     refImgUrl = referenceImage,
+    thirdImgUrl = thirdImage,
     srcM = sourceMeta,
-    refM = referenceMeta
+    refM = referenceMeta,
+    thirdM = thirdMeta
   ) => {
     if (!srcImgUrl || !refImgUrl || !srcM || !refM) {
-      setErrorMessage('Please upload or load both Source and Reference images before running registration.');
+      setErrorMessage('Please upload or load at least OHRC and TMC images before running registration.');
       return;
     }
 
@@ -127,11 +166,48 @@ export function App() {
     setRegistrationResult(null);
 
     try {
-      // Convert images to HTMLCanvasElements
+      // 1. Convert source and reference images to canvas
       const srcCanvas = await loadImageToCanvas(srcImgUrl);
       const refCanvas = await loadImageToCanvas(refImgUrl);
+      let thirdCanvas: HTMLCanvasElement | undefined = undefined;
 
-      // Run orchestrator
+      if (thirdImgUrl) {
+        thirdCanvas = await loadImageToCanvas(thirdImgUrl);
+      }
+
+      // 2. If 3 images are present, perform Outlier Sensor Detection First
+      if (thirdCanvas && thirdM) {
+        setPipelineStatus({
+          stage: 'VALIDATION',
+          progress: 15,
+          message: 'Performing Tri-Sensor Scene Triangulation (OHRC ↔ TMC ↔ IIRS)...',
+        });
+
+        const validation = await validateTriSensorScene(
+          srcCanvas,
+          refCanvas,
+          thirdCanvas,
+          srcM,
+          refM,
+          thirdM,
+          options.featureMethod
+        );
+
+        setTriSensorValidation(validation);
+
+        // If an outlier is detected, block registration and prompt user!
+        if (validation.status === 'OUTLIER_DETECTED') {
+          setIsProcessing(false);
+          setPipelineStatus({
+            stage: 'IDLE',
+            progress: 0,
+            message: `Outlier Sensor Detected: ${validation.outlierSensor || validation.outlierSlot}. Registration blocked.`,
+          });
+          return;
+        }
+      }
+
+      // 3. Run full registration pipeline
       const result = await runRegistrationPipeline(
         srcCanvas,
         refCanvas,
@@ -139,6 +215,8 @@ export function App() {
         refM,
         {
           ...options,
+          thirdCanvas,
+          thirdMeta: thirdM || undefined,
           onProgress: status => setPipelineStatus(status),
         }
       );
@@ -147,7 +225,10 @@ export function App() {
       setIsProcessing(false);
 
       // Persist to history
-      saveRegistrationToHistory(result, `${srcM.sensor} ⟷ ${refM.sensor} (${srcM.targetRegion || 'Lunar South Pole'})`);
+      saveRegistrationToHistory(
+        result,
+        `${srcM.sensor} ⟷ ${refM.sensor}${thirdM ? ` ⟷ ${thirdM.sensor}` : ''} (${srcM.targetRegion || 'Lunar South Pole'})`
+      );
 
       // Scroll to results
       setTimeout(() => {
@@ -158,6 +239,29 @@ export function App() {
       setIsProcessing(false);
       setErrorMessage(err.message || 'Registration failed due to numerical instability or insufficient feature overlap.');
     }
+  };
+
+  // Proceed with verified pair after outlier detection
+  const handleProceedWithVerifiedPair = () => {
+    if (!triSensorValidation) return;
+    const { validSensors } = triSensorValidation;
+
+    // Default to OHRC and TMC pair registration
+    executePipeline(
+      {
+        featureMethod: 'SIFT',
+        transformModel: 'HOMOGRAPHY',
+        inlierThresholdPx: 3.0,
+        enableCLAHE: true,
+        enableSubpixel: true,
+      },
+      sourceImage,
+      referenceImage,
+      null, // Exclude outlier third image
+      sourceMeta,
+      referenceMeta,
+      null
+    );
   };
 
   // Set RTL attribute if Arabic
@@ -177,6 +281,7 @@ export function App() {
         onOpenDemo={() => setDemoModalOpen(true)}
         onOpenHistory={() => setHistoryModalOpen(true)}
         onOpenDiagnostics={() => setDiagnosticsModalOpen(true)}
+        onOpenFeatureRegistry={() => setFeatureRegistryOpen(true)}
         onReset={handleReset}
         hasResult={registrationResult !== null || sourceImage !== null}
       />
@@ -207,34 +312,55 @@ export function App() {
           </div>
         )}
 
-        {/* 1. Dual Image Workspace */}
+        {/* 1. Multi-Sensor Image Workspace */}
         <div ref={workspaceRef}>
           <ImageWorkspace
             sourceImage={sourceImage}
             referenceImage={referenceImage}
+            thirdImage={thirdImage}
             sourceMeta={sourceMeta}
             referenceMeta={referenceMeta}
+            thirdMeta={thirdMeta}
             onSourceUpload={(url, meta) => {
               setSourceImage(url);
               setSourceMeta(meta);
               setRegistrationResult(null);
+              setTriSensorValidation(null);
             }}
             onReferenceUpload={(url, meta) => {
               setReferenceImage(url);
               setReferenceMeta(meta);
               setRegistrationResult(null);
+              setTriSensorValidation(null);
+            }}
+            onThirdUpload={(url, meta) => {
+              setThirdImage(url);
+              setThirdMeta(meta);
+              setRegistrationResult(null);
+              setTriSensorValidation(null);
             }}
             onClearSource={() => {
               setSourceImage(null);
               setSourceMeta(null);
               setRegistrationResult(null);
+              setTriSensorValidation(null);
             }}
             onClearReference={() => {
               setReferenceImage(null);
               setReferenceMeta(null);
               setRegistrationResult(null);
+              setTriSensorValidation(null);
+            }}
+            onClearThird={() => {
+              setThirdImage(null);
+              setThirdMeta(null);
+              setRegistrationResult(null);
+              setTriSensorValidation(null);
             }}
             onExecute={options => executePipeline(options)}
+            onLoadTriSensorPreset={handleLoadTriSensorPreset}
+            triSensorValidation={triSensorValidation}
+            onProceedWithVerifiedPair={handleProceedWithVerifiedPair}
             isProcessing={isProcessing}
             currentLang={currentLang}
           />
@@ -261,6 +387,11 @@ export function App() {
                 <span className="px-2 py-0.5 rounded-full bg-emerald-950 border border-emerald-800 text-xs font-mono text-emerald-300 font-bold">
                   RMSE: {registrationResult.metrics.rmse} px
                 </span>
+                {registrationResult.explainableConfidence && (
+                  <span className="px-2 py-0.5 rounded-full bg-cyan-950 border border-cyan-800 text-xs font-mono text-cyan-300 font-bold">
+                    Confidence: {registrationResult.explainableConfidence.overallScore}% ({registrationResult.explainableConfidence.verdict})
+                  </span>
+                )}
               </div>
 
               <div className="flex items-center gap-3">
@@ -290,7 +421,7 @@ export function App() {
               currentLang={currentLang}
             />
 
-            {/* Scientific Metrics Panel */}
+            {/* Scientific Metrics Panel + Explainable Confidence + Lunar Feature Cards */}
             <MetricsPanel
               result={registrationResult}
               currentLang={currentLang}
@@ -306,10 +437,10 @@ export function App() {
           <Moon className="w-4 h-4 text-cyan-400" />
           <span className="font-semibold text-slate-300">Lunar Image Registration Platform</span>
           <span>•</span>
-          <span>Chandrayaan-2 OHRC / TMC-2 Compatible</span>
+          <span>ISRO Chandrayaan-2 OHRC / TMC-2 / IIRS Standard</span>
         </div>
         <p className="text-[11px] text-slate-600">
-          Precision Planetary Image Processing & Sub-Pixel Correspondence Verification.
+          Precision Planetary Image Processing, Multi-Sensor Outlier Triangulation & Lunar Landmark Identity Registry.
         </p>
       </footer>
 
@@ -355,6 +486,12 @@ export function App() {
         isOpen={diagnosticsModalOpen}
         onClose={() => setDiagnosticsModalOpen(false)}
         currentLang={currentLang}
+      />
+
+      <LunarFeatureExplorer
+        isOpen={featureRegistryOpen}
+        onClose={() => setFeatureRegistryOpen(false)}
+        currentResultFeatures={registrationResult?.lunarFeatures}
       />
     </div>
   );

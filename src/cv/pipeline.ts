@@ -6,6 +6,7 @@ import {
   RegistrationMetrics,
   StageStatus,
   MatchPoint,
+  TriSensorValidationResult,
 } from '../types';
 import {
   imageDataToGrayscale,
@@ -22,6 +23,9 @@ import {
   generateDifferenceMap,
   generateMatchesCanvas,
 } from './warping';
+import { computeExplainableConfidence } from './confidenceEngine';
+import { generateOrMatchLunarFeatures } from './lunarFeatureDatabase';
+import { validateTriSensorScene } from './triSensorValidation';
 
 export interface PipelineOptions {
   featureMethod?: FeatureMethod;
@@ -32,6 +36,8 @@ export interface PipelineOptions {
   enableCLAHE?: boolean;
   enableSubpixel?: boolean;
   onProgress?: (status: StageStatus) => void;
+  thirdCanvas?: HTMLCanvasElement;
+  thirdMeta?: ImageMetadata;
 }
 
 /**
@@ -258,11 +264,40 @@ export async function runRegistrationPipeline(
   await sleep(40);
 
   // 9. QUALITY EVALUATION & SPATIAL DISTRIBUTION
-  report('EVALUATING_QUALITY', 98, 'Calculating RMSE, spatial entropy distribution, and confidence scores...');
+  report('EVALUATING_QUALITY', 95, 'Calculating RMSE, spatial entropy distribution, and confidence scores...');
   const inlierMatches = finalMatches.filter(m => m.inlier);
   const spatial = calculateSpatialDistribution(inlierMatches, referenceCanvas.width, referenceCanvas.height);
 
   finalMatches = assignLunarCoordinates(finalMatches, referenceMeta);
+
+  // 10. EXPLAINABLE CONFIDENCE DECOMPOSITION
+  const explainableConf = computeExplainableConfidence(
+    {
+      totalCandidates: candidateMatches.length,
+      inlierCount: ransacResult.inlierCount,
+      inlierRatio: ransacResult.inlierRatio,
+      rmse: ransacResult.rmse,
+      meanResidual: ransacResult.meanResidual,
+      spatialDistributionScore: spatial.score,
+      subpixelAchieved,
+      subpixelMeanShift,
+    },
+    sourceMeta,
+    referenceMeta
+  );
+
+  // 11. LUNAR FEATURE IDENTITY CARDS & PERSISTENT REGISTRY
+  report('FEATURE_ID_GENERATION', 98, 'Cataloging verified lunar features and syncing with persistent registry...');
+  const observedSensorList = [sourceMeta.sensor, referenceMeta.sensor];
+  if (options.thirdMeta) observedSensorList.push(options.thirdMeta.sensor);
+  
+  const lunarFeatures = generateOrMatchLunarFeatures(
+    inlierMatches,
+    referenceMeta,
+    observedSensorList,
+    explainableConf.overallScore,
+    options.thirdMeta
+  );
 
   const warnings: string[] = [];
   if (spatial.warning) warnings.push(spatial.warning);
@@ -277,7 +312,8 @@ export async function runRegistrationPipeline(
     rmse: ransacResult.rmse,
     meanResidual: ransacResult.meanResidual,
     maxResidual: ransacResult.maxResidual,
-    confidenceScore: ransacResult.confidenceScore,
+    confidenceScore: explainableConf.overallScore,
+    explainableConfidence: explainableConf,
     spatialDistributionScore: spatial.score,
     spatialWarning: spatial.warning,
     subpixelAchieved,
@@ -286,9 +322,9 @@ export async function runRegistrationPipeline(
     ransacIterations: ransacResult.iterations,
   };
 
-  const simpleExplanation = `Your lunar images were aligned with ${metrics.inlierCount} reliable correspondence points out of ${metrics.totalCandidates} candidates (${(metrics.inlierRatio * 100).toFixed(1)}% inlier ratio). The estimated registration error (RMSE) is ${metrics.rmse} pixels, achieving an algorithmic confidence score of ${metrics.confidenceScore}%. ${subpixelAchieved ? 'Sub-pixel accuracy was successfully achieved.' : 'Standard pixel-level alignment achieved.'}`;
+  const simpleExplanation = `Your lunar images were aligned with ${metrics.inlierCount} verified correspondence points (${(metrics.inlierRatio * 100).toFixed(1)}% inlier consensus). Registration error (RMSE) is ${metrics.rmse.toFixed(2)} px with an explainable confidence score of ${explainableConf.overallScore}% (${explainableConf.verdict}). ${lunarFeatures.length} persistent lunar features were cataloged.`;
 
-  const technicalExplanation = `Estimated ${transformModel} transformation matrix using RANSAC across ${metrics.ransacIterations} iterations. Detected ${srcKeypoints.length} source and ${refKeypoints.length} reference keypoints via ${featureMethod}. Final model achieved a Root Mean Square Error (RMSE) of ${metrics.rmse} px on ${metrics.inlierCount} verified inliers with spatial grid coverage score of ${metrics.spatialDistributionScore}%. Scale factor: ${ransacResult.transformation.scaleFactor ?? 1.0}, estimated rotation: ${ransacResult.transformation.rotationDeg ?? 0}°.`;
+  const technicalExplanation = `Estimated ${transformModel} transformation matrix using RANSAC across ${metrics.ransacIterations} iterations. Detected ${srcKeypoints.length} source and ${refKeypoints.length} reference keypoints via ${featureMethod}. Final model achieved Root Mean Square Error (RMSE) of ${metrics.rmse.toFixed(2)} px across ${metrics.inlierCount} verified inliers with spatial grid coverage score of ${metrics.spatialDistributionScore}%. Scale factor: ${ransacResult.transformation.scaleFactor ?? 1.0}, estimated rotation: ${ransacResult.transformation.rotationDeg ?? 0}°.`;
 
   report('COMPLETED', 100, 'Registration successfully completed!');
 
@@ -297,6 +333,7 @@ export async function runRegistrationPipeline(
     timestamp: new Date().toISOString(),
     sourceMeta,
     referenceMeta,
+    thirdMeta: options.thirdMeta,
     featureMethod,
     transformModel,
     sourceKeypoints: srcKeypoints,
@@ -309,6 +346,9 @@ export async function runRegistrationPipeline(
     matchesDataUrl: matchesCanvas.toDataURL('image/png'),
     sourceDataUrl: sourceCanvas.toDataURL('image/png'),
     referenceDataUrl: referenceCanvas.toDataURL('image/png'),
+    thirdDataUrl: options.thirdCanvas?.toDataURL('image/png'),
+    lunarFeatures,
+    explainableConfidence: explainableConf,
     simpleExplanation,
     technicalExplanation,
     warnings,
